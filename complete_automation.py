@@ -218,7 +218,7 @@ class RealTTSEngine:
             try:
                 import pyttsx3
                 self.engine = pyttsx3.init()
-                self.engine.setProperty('rate', 150)  # 속도 조절
+                self.engine.setProperty('rate', 110)  # 속도 조절 (향상된 명료성)
                 self.engine.setProperty('volume', 0.9)  # 볼륨 조절
             except:
                 self.engine = None
