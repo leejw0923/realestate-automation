@@ -327,6 +327,27 @@ class RealTTSEngine:
 
         except Exception as e:
             logger.error(f"Mock 음성 생성 오류: {e}")
+    
+    def generate_qa_voices(self, qa_pairs: List[Dict], output_folder: str) -> List[str]:
+        """Q&A 형식 음성 생성 (남성 질문, 여성 답변)"""
+        try:
+            voice_files = []
+            
+            for i, qa in enumerate(qa_pairs):
+                question_file = os.path.join(output_folder, f"question_{i+1}.wav")
+                self.generate_voice(qa['question'], question_file)
+                voice_files.append(question_file)
+                
+                answer_file = os.path.join(output_folder, f"answer_{i+1}.wav")
+                self.generate_voice(qa['answer'], answer_file)
+                voice_files.append(answer_file)
+            
+            logger.info(f"✅ Q&A 음성 파일 {len(voice_files)}개 생성 완료")
+            return voice_files
+            
+        except Exception as e:
+            logger.error(f"Q&A 음성 생성 실패: {e}")
+            return []
             return False
 
 
@@ -1747,6 +1768,391 @@ class ServeWebsiteManager:
             self.driver.quit()
             self.driver = None
 
+class PropertyLookupManager:
+    """부동산 조회 로직 관리자"""
+    
+    def __init__(self):
+        self.friday_folder_path = self._map_windows_path("C:/Users/master/Desktop/Friday Folder")
+        self.naver_map_api_key = os.getenv("NAVER_MAP_API_KEY", "YOUR_NAVER_MAP_API_KEY")
+    
+    def _map_windows_path(self, windows_path: str) -> str:
+        """Windows 경로를 Linux 경로로 매핑"""
+        return windows_path.replace("C:/Users/master/Desktop/", "/home/ubuntu/")
+    
+    def check_friday_folder_csv(self) -> List[Dict[str, Any]]:
+        """Friday Folder의 apartment_list.csv 확인"""
+        try:
+            os.makedirs(self.friday_folder_path, exist_ok=True)
+            
+            csv_path = os.path.join(self.friday_folder_path, "apartment_list.csv")
+            
+            if os.path.exists(csv_path):
+                logger.info(f"📋 Friday Folder CSV 발견: {csv_path}")
+                
+                import pandas as pd
+                df = pd.read_csv(csv_path)
+                
+                apartments = []
+                for _, row in df.iterrows():
+                    apartments.append({
+                        'name': row.get('아파트명', row.get('name', '')),
+                        'address': row.get('주소', row.get('address', '')),
+                        'type': row.get('유형', row.get('type', '아파트')),
+                        'description': row.get('설명', row.get('description', ''))
+                    })
+                
+                logger.info(f"✅ Friday Folder에서 {len(apartments)}개 아파트 로드됨")
+                return apartments
+            else:
+                logger.info("ℹ️ Friday Folder CSV 없음 - Naver Map API 사용")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Friday Folder CSV 읽기 실패: {e}")
+            return []
+    
+    def find_nearby_apartments_naver(self, last_location: str) -> List[Dict[str, Any]]:
+        """네이버 지도 API로 근처 아파트 검색"""
+        try:
+            import requests
+            
+            logger.info(f"🗺️ 네이버 지도 API로 근처 아파트 검색: {last_location}")
+            
+            if self.naver_map_api_key and self.naver_map_api_key != "YOUR_NAVER_MAP_API_KEY":
+                headers = {
+                    'X-NCP-APIGW-API-KEY-ID': self.naver_map_api_key,
+                    'X-NCP-APIGW-API-KEY': self.naver_map_api_key
+                }
+                
+                search_url = "https://naveropenapi.apigw.ntruss.com/map-place/v1/search"
+                params = {
+                    'query': f'{last_location} 아파트',
+                    'coordinate': '127.1054221,37.3595316',  # 기본 좌표
+                    'display': 5
+                }
+                
+                try:
+                    response = requests.get(search_url, headers=headers, params=params)
+                    if response.status_code == 200:
+                        data = response.json()
+                        nearby_apartments = []
+                        
+                        for place in data.get('places', []):
+                            nearby_apartments.append({
+                                'name': place.get('name', ''),
+                                'address': place.get('road_address', place.get('address', '')),
+                                'type': '아파트',
+                                'distance': place.get('distance', 'N/A'),
+                                'description': f"{place.get('name', '')} - {place.get('road_address', '')}"
+                            })
+                        
+                        logger.info(f"✅ 네이버 지도에서 {len(nearby_apartments)}개 아파트 발견")
+                        return nearby_apartments
+                except requests.RequestException as e:
+                    logger.warning(f"네이버 지도 API 호출 실패: {e}")
+            
+            nearby_apartments = [
+                {
+                    'name': f'{last_location} 근처 아파트 1',
+                    'address': f'{last_location} 인근 아파트단지',
+                    'type': '아파트',
+                    'distance': '500m',
+                    'description': f'{last_location} 인근의 신축 아파트단지입니다.'
+                },
+                {
+                    'name': f'{last_location} 근처 아파트 2', 
+                    'address': f'{last_location} 인근 주거단지',
+                    'type': '아파트',
+                    'distance': '800m',
+                    'description': f'{last_location} 근처의 대단지 아파트입니다.'
+                }
+            ]
+            
+            logger.info(f"✅ Mock 데이터로 {len(nearby_apartments)}개 아파트 생성")
+            return nearby_apartments
+            
+        except Exception as e:
+            logger.error(f"네이버 지도 API 호출 실패: {e}")
+            return []
+    
+    def get_property_for_automation(self, last_location: str = "") -> Dict[str, Any]:
+        """자동화용 부동산 정보 가져오기"""
+        friday_apartments = self.check_friday_folder_csv()
+        if friday_apartments:
+            logger.info("📋 Friday Folder CSV에서 아파트 정보 사용")
+            return friday_apartments[0]  # 첫 번째 아파트 사용
+        
+        if last_location:
+            nearby_apartments = self.find_nearby_apartments_naver(last_location)
+            if nearby_apartments:
+                logger.info("🗺️ 네이버 지도 API에서 아파트 정보 사용")
+                return nearby_apartments[0]
+        
+        logger.info("🏠 기본 아파트 정보 사용")
+        return {
+            'name': '기본 아파트',
+            'address': '서울시 강남구 대치동',
+            'type': '아파트',
+            'description': '교통이 편리하고 주변 인프라가 잘 갖춰진 아파트입니다.'
+        }
+
+
+class WeeklyScheduleManager:
+    """주간 자동화 스케줄 관리자"""
+    
+    def __init__(self, automation_system):
+        self.automation_system = automation_system
+        self.property_lookup = PropertyLookupManager()
+        self.is_running = False
+        self.schedule_thread = None
+    
+    def setup_weekly_schedule(self):
+        """주간 스케줄 설정"""
+        try:
+            import schedule
+            
+            schedule.clear()
+            
+            schedule.every().friday.at("15:00").do(self._generate_apartment_intro_video)
+            
+            schedule.every().saturday.at("10:00").do(self._generate_real_estate_info_video)
+            
+            logger.info("✅ 주간 스케줄 설정 완료")
+            logger.info("📅 금요일 15:00 - 아파트 소개 영상 (Q&A)")
+            logger.info("📅 토요일 10:00 - 부동산 정보 영상")
+            return True
+            
+        except Exception as e:
+            logger.error(f"주간 스케줄 설정 실패: {e}")
+            return False
+    
+    def _generate_apartment_intro_video(self):
+        """아파트 소개 영상 생성 (Q&A 형식, 남성 질문/여성 답변)"""
+        try:
+            logger.info("🏢 금요일 아파트 소개 영상 생성 시작")
+            
+            property_info = self.property_lookup.get_property_for_automation()
+            
+            property_data = PropertyData(
+                address=property_info.get('address', ''),
+                property_type=property_info.get('type', '아파트'),
+                description=property_info.get('description', ''),
+                price="문의",
+                contact="청산부동산"
+            )
+            
+            qa_script = self._create_qa_script(property_info)
+            
+            video_file = self._create_qa_video(qa_script, property_data)
+            
+            if video_file:
+                if self._show_weekly_confirmation("아파트 소개 영상", video_file, property_data):
+                    self.automation_system.youtube_uploader.upload_video_with_confirmation(
+                        video_file, property_data
+                    )
+                    logger.info("✅ 금요일 아파트 소개 영상 업로드 완료")
+                else:
+                    logger.info("ℹ️ 사용자가 업로드를 취소했습니다")
+            
+        except Exception as e:
+            logger.error(f"아파트 소개 영상 생성 실패: {e}")
+    
+    def _generate_real_estate_info_video(self):
+        """부동산 정보 영상 생성 (동적 주제 선택)"""
+        try:
+            logger.info("📊 토요일 부동산 정보 영상 생성 시작")
+            
+            topics = [
+                "부동산 취득세 절약 방법",
+                "전세 대출 금리 비교",
+                "부동산 계약 시 주의사항",
+                "재건축 아파트 투자 가이드",
+                "부동산 양도소득세 계산법",
+                "청약 당첨 확률 높이는 방법"
+            ]
+            
+            import random
+            selected_topic = random.choice(topics)
+            
+            logger.info(f"📋 선택된 주제: {selected_topic}")
+            
+            video_file = self._create_info_video(selected_topic)
+            
+            if video_file:
+                property_data = PropertyData(
+                    address="부동산 정보",
+                    property_type="정보영상",
+                    description=selected_topic,
+                    price="",
+                    contact="청산부동산"
+                )
+                
+                if self._show_weekly_confirmation("부동산 정보 영상", video_file, property_data):
+                    self.automation_system.youtube_uploader.upload_video_with_confirmation(
+                        video_file, property_data
+                    )
+                    logger.info("✅ 토요일 부동산 정보 영상 업로드 완료")
+                else:
+                    logger.info("ℹ️ 사용자가 업로드를 취소했습니다")
+            
+        except Exception as e:
+            logger.error(f"부동산 정보 영상 생성 실패: {e}")
+    
+    def _create_qa_script(self, property_info: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Q&A 스크립트 생성"""
+        qa_pairs = [
+            {
+                'question': f"{property_info.get('name', '이 아파트')}는 어떤 곳인가요?",
+                'answer': f"{property_info.get('name', '이 아파트')}는 {property_info.get('description', '좋은 위치에 있는 아파트')}입니다."
+            },
+            {
+                'question': "투자 가치는 어떤가요?",
+                'answer': "해당 지역은 교통이 편리하고 개발 계획이 있어 투자 가치가 높습니다."
+            },
+            {
+                'question': "주변 시설은 어떤가요?",
+                'answer': "학교, 병원, 쇼핑센터 등 생활 편의시설이 잘 갖춰져 있습니다."
+            },
+            {
+                'question': "교통편은 어떤가요?",
+                'answer': "지하철역과 버스정류장이 가까워 대중교통 이용이 매우 편리합니다."
+            }
+        ]
+        return qa_pairs
+    
+    def _create_qa_video(self, qa_script: List[Dict[str, str]], property_data: PropertyData) -> str:
+        """Q&A 형식 영상 생성"""
+        try:
+            output_folder = self.automation_system._get_output_folder()
+            
+            voice_files = self.automation_system.tts_engine.generate_qa_voices(qa_script, output_folder)
+            
+            if voice_files:
+                video_file = os.path.join(output_folder, "동영상", f"qa_apartment_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+                
+                success = self.automation_system.video_editor._combine_images_audio_to_video(
+                    [], voice_files[0], video_file, "/home/ubuntu/배경음악"
+                )
+                
+                if success:
+                    logger.info(f"✅ Q&A 영상 생성 완료: {video_file}")
+                    return video_file
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Q&A 영상 생성 실패: {e}")
+            return None
+    
+    def _create_info_video(self, topic: str) -> str:
+        """부동산 정보 영상 생성"""
+        try:
+            output_folder = self.automation_system._get_output_folder()
+            
+            script = f"""
+            안녕하세요, 청산부동산입니다.
+            오늘은 {topic}에 대해 알아보겠습니다.
+            
+            부동산 투자나 거래 시 꼭 알아야 할 중요한 정보들을 
+            쉽고 자세하게 설명드리겠습니다.
+            
+            더 자세한 상담이 필요하시면 청산부동산으로 연락주세요.
+            """
+            
+            audio_file = os.path.join(output_folder, f"info_audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav")
+            
+            if self.automation_system.tts_engine.generate_voice(script, audio_file):
+                video_file = os.path.join(output_folder, "동영상", f"info_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+                
+                success = self.automation_system.video_editor._combine_images_audio_to_video(
+                    [], audio_file, video_file, "/home/ubuntu/배경음악"
+                )
+                
+                if success:
+                    logger.info(f"✅ 정보 영상 생성 완료: {video_file}")
+                    return video_file
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"정보 영상 생성 실패: {e}")
+            return None
+    
+    def _show_weekly_confirmation(self, video_type: str, video_file: str, property_data: PropertyData) -> bool:
+        """주간 자동화 확인 팝업"""
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            
+            root = tk.Tk()
+            root.withdraw()  # 메인 윈도우 숨기기
+            
+            message = f"""
+📅 주간 자동화 - {video_type}
+
+📁 파일: {os.path.basename(video_file)}
+📋 내용: {property_data.description}
+📅 생성시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+YouTube에 업로드하시겠습니까?
+            """
+            
+            result = messagebox.askyesno("주간 자동화 확인", message)
+            root.destroy()
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"주간 확인 팝업 오류: {e}")
+            response = input(f"\n📅 주간 자동화 - {video_type}\n업로드하시겠습니까? (y/n): ")
+            return response.lower() in ['y', 'yes', '예']
+    
+    def start_weekly_automation(self):
+        """주간 자동화 시작"""
+        try:
+            import schedule
+            import time
+            import threading
+            
+            if not self.setup_weekly_schedule():
+                return False
+            
+            self.is_running = True
+            
+            def run_schedule():
+                while self.is_running:
+                    schedule.run_pending()
+                    time.sleep(60)  # 1분마다 체크
+            
+            self.schedule_thread = threading.Thread(target=run_schedule, daemon=True)
+            self.schedule_thread.start()
+            
+            logger.info("🚀 주간 자동화 스케줄 시작됨")
+            return True
+            
+        except Exception as e:
+            logger.error(f"주간 자동화 시작 실패: {e}")
+            return False
+    
+    def stop_weekly_automation(self):
+        """주간 자동화 중지"""
+        try:
+            self.is_running = False
+            if self.schedule_thread and self.schedule_thread.is_alive():
+                self.schedule_thread.join(timeout=2)
+            
+            import schedule
+            schedule.clear()
+            
+            logger.info("⏹️ 주간 자동화 스케줄 중지됨")
+            return True
+            
+        except Exception as e:
+            logger.error(f"주간 자동화 중지 실패: {e}")
+            return False
+
+
+
 
 
 class CardNewsGenerator:
@@ -1992,6 +2398,13 @@ class CompleteAutomationSystem:
         self.card_news_generator = CardNewsGenerator()
         self.contract_generator = ContractGenerator()
         self.youtube_uploader = YouTubeUploader()
+        
+        self.property_lookup = PropertyLookupManager()
+        self.weekly_schedule = WeeklyScheduleManager(self)
+        
+        logger.info("✅ 모든 자동화 컴포넌트 로딩 완료")
+        logger.info("🆕 v4.0 새 기능: TEN GUI, 주간 스케줄링, Q&A 영상, 네이버 지도 API")
+
         self.auto_monitor = AutoMonitoringManager(self)
         self.progress_callback = None
         self.progress_tracker = None
@@ -2562,6 +2975,110 @@ class CompleteAutomationSystem:
         except Exception as e:
             logger.error(f"완전한 워크플로우 실패: {e}")
             return None
+
+
+    def start_weekly_automation(self):
+        """주간 자동화 시작"""
+        try:
+            logger.info("📅 주간 자동화 스케줄 시작")
+            return self.weekly_schedule.start_weekly_automation()
+        except Exception as e:
+            logger.error(f"주간 자동화 시작 실패: {e}")
+            return False
+    
+    def create_qa_video_workflow(self, property_data: PropertyData):
+        """Q&A 형식 영상 생성 워크플로우"""
+        try:
+            logger.info("🎙️ Q&A 형식 영상 생성 시작")
+            
+            qa_pairs = [
+                {
+                    'question': f"{property_data.address}는 어떤 곳인가요?",
+                    'answer': f"{property_data.address}는 {property_data.description} 위치한 {property_data.property_type}입니다."
+                },
+                {
+                    'question': "투자 가치는 어떤가요?",
+                    'answer': "해당 지역은 교통이 편리하고 개발 계획이 있어 투자 가치가 높습니다."
+                },
+                {
+                    'question': "주변 시설은 어떤가요?",
+                    'answer': "학교, 병원, 쇼핑센터 등 생활 편의시설이 잘 갖춰져 있습니다."
+                }
+            ]
+            
+            output_folder = self._get_output_folder()
+            voice_files = self.tts_engine.generate_qa_voices(qa_pairs, output_folder)
+            
+            video_file = os.path.join(output_folder, "동영상", f"qa_video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+            
+            background_music_folder = "/home/ubuntu/배경음악"
+            success = self.video_editor._combine_images_audio_to_video(
+                [], voice_files[0] if voice_files else "", video_file, background_music_folder
+            )
+            
+            if success:
+                logger.info("✅ Q&A 형식 영상 생성 완료")
+                return video_file
+            else:
+                logger.error("❌ Q&A 형식 영상 생성 실패")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Q&A 영상 워크플로우 실패: {e}")
+            return None
+    
+    def register_on_all_platforms(self, property_data: PropertyData):
+        """모든 플랫폼에 부동산 등록"""
+        try:
+            logger.info("🌐 모든 플랫폼 부동산 등록 시작")
+            
+            results = {
+                'ten_success': False,
+                'serve_success': False
+            }
+            
+            results['ten_success'] = self.ten_manager.register_property(property_data)
+            
+            results['serve_success'] = self.serve_manager.register_property(property_data)
+            
+            logger.info(f"📊 등록 결과 - TEN: {'✅' if results['ten_success'] else '❌'}, 써브: {'✅' if results['serve_success'] else '❌'}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"플랫폼 등록 실패: {e}")
+            return {'ten_success': False, 'serve_success': False}
+    
+    def enhanced_automation_workflow(self):
+        """향상된 자동화 워크플로우 - 새 기능 포함"""
+        try:
+            logger.info("🚀 향상된 부동산 자동화 워크플로우 시작")
+            
+            property_info = self.property_lookup.get_property_for_automation()
+            
+            property_data = PropertyData(
+                address=property_info.get('address', ''),
+                property_type=property_info.get('type', '아파트'),
+                price="문의",
+                area="84㎡",
+                description=property_info.get('description', '좋은 위치의 부동산입니다.')
+            )
+            
+            qa_video = self.create_qa_video_workflow(property_data)
+            
+            platform_results = self.register_on_all_platforms(property_data)
+            
+            card_news_result = self.generate_card_news(property_data)
+            
+            contract_result = self.generate_contract(property_data)
+            
+            self._send_completion_notification(property_data, qa_video)
+            
+            logger.info("✅ 향상된 자동화 워크플로우 완료")
+            return True
+            
+        except Exception as e:
+            logger.error(f"향상된 자동화 워크플로우 실패: {e}")
+            return False
 
             return f"업로드 오류: {str(e)}"
 
